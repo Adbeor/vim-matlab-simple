@@ -23,7 +23,7 @@ class MatlabCliController:
             print("Connected to Matlab server")
         except socket.error as e:
             print(f"Failed to connect to Matlab server: {e}")
-            print("Make sure the server is running with: python matlab-server.py")
+            print("Make sure the server is running with: python matlab_server.py")  # Corregido el nombre del archivo
             raise
 
     def run_code(self, lines):
@@ -38,6 +38,23 @@ class MatlabCliController:
                 break
             except Exception as ex:
                 print(f"Error sending code to Matlab: {ex}")
+                self.connect_to_server()
+                num_retry += 1
+                time.sleep(1)
+
+    def run_file(self, filepath):
+        """Run a complete MATLAB file."""
+        filepath = os.path.abspath(filepath)  # Convertir a ruta absoluta
+        command = f"run_file:{filepath}"
+        
+        num_retry = 0
+        while num_retry < 3:
+            try:
+                self.sock.sendall((command + "\n").encode('utf-8'))
+                print(f"Sent run file command to Matlab: {filepath}")
+                break
+            except Exception as ex:
+                print(f"Error sending run file command to Matlab: {ex}")
                 self.connect_to_server()
                 num_retry += 1
                 time.sleep(1)

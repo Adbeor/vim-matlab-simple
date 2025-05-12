@@ -5,7 +5,7 @@ Simplified Matlab Server for Vim
 This script launches Matlab and sets up a TCP server to communicate with Vim.
 """
 
-import SocketServer
+import socketserver  # Corregido de SocketServer a socketserver
 import os
 import random
 import signal
@@ -78,7 +78,8 @@ class Matlab:
                     hide_until_newline = True
                     self.proc.send(command)
                 else:
-                    self.proc.stdin.write(command)
+                    # Convertir a bytes antes de escribir
+                    self.proc.stdin.write(command.encode('utf-8'))
                     self.proc.stdin.flush()
                 break
             except Exception as ex:
@@ -86,9 +87,24 @@ class Matlab:
                 self.launch_process()
                 num_retry += 1
                 time.sleep(1)
+                
+    def run_file(self, filepath):
+        """Run a complete MATLAB file."""
+        # Strip any quotes that might be around the path
+        filepath = filepath.strip("'\"")
+        
+        # Get just the filename without extension for the run command
+        filename = os.path.splitext(os.path.basename(filepath))[0]
+        
+        # Create the MATLAB command to run the file
+        code = f"run('{filepath}');"
+        
+        # Run the command
+        self.run_code(code)
+        print(f"Running MATLAB file: {filepath}")
 
 
-class TCPHandler(SocketServer.StreamRequestHandler):
+class TCPHandler(socketserver.StreamRequestHandler):  # Cambiado a socketserver
     """Handle TCP connections from Vim."""
     def handle(self):
         print_flush("New connection: {}".format(self.client_address))
@@ -97,18 +113,23 @@ class TCPHandler(SocketServer.StreamRequestHandler):
             msg = self.rfile.readline()
             if not msg:
                 break
-            msg = msg.strip()
+            msg = msg.decode('utf-8').strip()  # Decodificar bytes a string
             print_flush((msg[:74] + '...') if len(msg) > 74 else msg, end='')
 
             options = {
                 'kill': self.server.matlab.kill,
                 'cancel': self.server.matlab.cancel,
             }
-
-            if msg in options:
+            
+            # Verificar si es un comando para ejecutar un archivo
+            if msg.startswith('run_file:'):
+                filepath = msg[9:]  # Extraer la ruta del archivo después de 'run_file:'
+                self.server.matlab.run_file(filepath)
+            elif msg in options:
                 options[msg]()
             else:
                 self.server.matlab.run_code(msg)
+                
         print_flush('Connection closed: {}'.format(self.client_address))
 
 
@@ -160,7 +181,9 @@ def forward_input(matlab):
         matlab.proc.interact(input_filter=input_filter, output_filter=output_filter)
     else:
         while True:
-            matlab.proc.stdin.write(stdin.readline())
+            # Codificar la línea a bytes antes de escribirla
+            line = stdin.readline()
+            matlab.proc.stdin.write(line.encode('utf-8'))
 
 
 def start_thread(target=None, args=()):
@@ -181,10 +204,10 @@ def print_flush(value, end='\n'):
 def main():
     """Main function to start the server."""
     host, port = "localhost", 43889
-    SocketServer.TCPServer.allow_reuse_address = True
+    socketserver.TCPServer.allow_reuse_address = True  # Cambiado a socketserver
 
     global server
-    server = SocketServer.TCPServer((host, port), TCPHandler)
+    server = socketserver.TCPServer((host, port), TCPHandler)  # Cambiado a socketserver
     server.matlab = Matlab()
 
     start_thread(target=forward_input, args=(server.matlab,))
