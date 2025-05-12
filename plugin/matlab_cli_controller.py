@@ -1,63 +1,170 @@
 """
-Simplified Matlab CLI Controller for Vim
+Optimized Matlab CLI Controller for Vim
 This module provides a simple interface to interact with Matlab via a TCP socket.
 """
 
 import socket
 import time
 import os
-from threading import Timer
+import logging
+import threading
+import queue
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='matlab_controller.log',
+    filemode='a'
+)
+logger = logging.getLogger('matlab_controller')
+
+# Cola para enviar comandos
+command_queue = queue.Queue()
 
 
 class MatlabCliController:
     """Controller for interacting with Matlab through TCP."""
     def __init__(self):
         self.host, self.port = "localhost", 43889
+        self.sock = None
+        self.connected = False
+        self.connect_lock = threading.Lock()
         self.connect_to_server()
+        
+        # Iniciar un hilo para procesar comandos
+        self._start_command_processor()
+
+    def _start_command_processor(self):
+        """Inicia un hilo para procesar comandos de la cola."""
+        def process_commands():
+            while True:
+                try:
+                    command, args = command_queue.get(timeout=0.5)
+                    if command == 'run_code':
+                        self._send_code(args)
+                    elif command == 'run_file':
+                        self._send_run_file(args)
+                    elif command == 'run_cell':
+                        self._send_cell(args)
+                    elif command == 'ctrl_c':
+                        self._send_ctrl_c()
+                    command_queue.task_done()
+                except queue.Empty:
+                    time.sleep(0.01)  # Pequeña pausa cuando no hay comandos
+                except Exception as ex:
+                    logger.error(f"Error processing command: {ex}")
+                    time.sleep(0.1)  # Pausa en caso de error
+        
+        # Iniciar hilo
+        cmd_thread = threading.Thread(target=process_commands)
+        cmd_thread.daemon = True
+        cmd_thread.start()
 
     def connect_to_server(self):
         """Connect to the Matlab server."""
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            self.sock.connect((self.host, self.port))
-            print("Connected to Matlab server")
-        except socket.error as e:
-            print(f"Failed to connect to Matlab server: {e}")
-            print("Make sure the server is running with: python matlab_server.py")  # Corregido el nombre del archivo
-            raise
+        with self.connect_lock:
+            if self.connected:
+                return True
+                
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                self.sock.connect((self.host, self.port))
+                self.connected = True
+                logger.info("Connected to Matlab server")
+                print("Connected to Matlab server")
+                return True
+            except socket.error as e:
+                self.connected = False
+                logger.error(f"Failed to connect to Matlab server: {e}")
+                print(f"Failed to connect to Matlab server: {e}")
+                print("Make sure the server is running with: python matlab_server.py")
+                return False
 
     def run_code(self, lines):
         """Send code to be executed in Matlab."""
-        code = ','.join(lines)
+        if isinstance(lines, list):
+            code = ','.join(lines)
+        else:
+            code = str(lines)
+        
+        # Encolar el comando
+        command_queue.put(('run_code', code))
+        logger.info(f"Enqueued code: {code[:50]}...")
 
+    def _send_code(self, code):
+        """Envía código a MATLAB (método interno)."""
         num_retry = 0
         while num_retry < 3:
             try:
+                if not self.connected and not self.connect_to_server():
+                    num_retry += 1
+                    time.sleep(0.2)
+                    continue
+                
                 self.sock.sendall((code + "\n").encode('utf-8'))
-                print(f"Sent to Matlab: {code}")
+                logger.info(f"Sent to Matlab: {code[:50]}...")
                 break
             except Exception as ex:
-                print(f"Error sending code to Matlab: {ex}")
-                self.connect_to_server()
+                logger.error(f"Error sending code to Matlab: {ex}")
+                self.connected = False
+                if not self.connect_to_server():
+                    time.sleep(0.2)
                 num_retry += 1
-                time.sleep(1)
+
+    def run_cell(self, cell_content):
+        """Run a Matlab cell (code block starting with %%)."""
+        command_queue.put(('run_cell', cell_content))
+        logger.info(f"Enqueued cell: {cell_content[:50]}...")
+
+    def _send_cell(self, cell_content):
+        """Envía una celda de código a MATLAB (método interno)."""
+        command = f"run_cell:{cell_content}"
+        num_retry = 0
+        while num_retry < 3:
+            try:
+                if not self.connected and not self.connect_to_server():
+                    num_retry += 1
+                    time.sleep(0.2)
+                    continue
+                    
+                self.sock.sendall((command + "\n").encode('utf-8'))
+                logger.info(f"Sent cell to Matlab: {cell_content[:50]}...")
+                break
+            except Exception as ex:
+                logger.error(f"Error sending cell to Matlab: {ex}")
+                self.connected = False
+                if not self.connect_to_server():
+                    time.sleep(0.2)
+                num_retry += 1
 
     def run_file(self, filepath):
         """Run a complete MATLAB file."""
+        command_queue.put(('run_file', filepath))
+        logger.info(f"Enqueued run file: {filepath}")
+
+    def _send_run_file(self, filepath):
+        """Envía comando para ejecutar archivo (método interno)."""
         filepath = os.path.abspath(filepath)  # Convertir a ruta absoluta
         command = f"run_file:{filepath}"
         
         num_retry = 0
         while num_retry < 3:
             try:
+                if not self.connected and not self.connect_to_server():
+                    num_retry += 1
+                    time.sleep(0.2)
+                    continue
+                    
                 self.sock.sendall((command + "\n").encode('utf-8'))
-                print(f"Sent run file command to Matlab: {filepath}")
+                logger.info(f"Sent run file command to Matlab: {filepath}")
                 break
             except Exception as ex:
-                print(f"Error sending run file command to Matlab: {ex}")
-                self.connect_to_server()
+                logger.error(f"Error sending run file command to Matlab: {ex}")
+                self.connected = False
+                if not self.connect_to_server():
+                    time.sleep(0.2)
                 num_retry += 1
-                time.sleep(1)
 
     def setup_matlab_path(self, path=None):
         """Add path to Matlab's path."""
@@ -66,7 +173,7 @@ class MatlabCliController:
             path = os.path.abspath(os.path.dirname(__file__))
             
         self.run_code([f"addpath('{path}');"])
-        print(f"Added to Matlab path: {path}")
+        logger.info(f"Added to Matlab path: {path}")
 
     def open_in_matlab_editor(self, path):
         """Open a file in Matlab editor."""
@@ -78,16 +185,28 @@ class MatlabCliController:
 
     def send_ctrl_c(self):
         """Send cancel command to Matlab."""
-        self.sock.sendall(b"cancel\n")
-        print("Cancel command sent to Matlab")
+        command_queue.put(('ctrl_c', None))
+        logger.info("Enqueued cancel command")
+
+    def _send_ctrl_c(self):
+        """Envía comando de cancelación (método interno)."""
+        try:
+            if self.connected:
+                self.sock.sendall(b"cancel\n")
+                logger.info("Cancel command sent to Matlab")
+        except Exception as ex:
+            logger.error(f"Error sending cancel command: {ex}")
+            self.connected = False
         
     def close(self):
         """Close the connection to Matlab server."""
         try:
-            self.sock.close()
-            print("Connection to Matlab server closed")
-        except:
-            pass
+            if self.sock:
+                self.sock.close()
+                self.connected = False
+                logger.info("Connection to Matlab server closed")
+        except Exception as ex:
+            logger.error(f"Error closing connection: {ex}")
 
 
 # Example usage
