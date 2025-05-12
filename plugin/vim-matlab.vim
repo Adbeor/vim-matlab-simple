@@ -19,8 +19,8 @@ augroup vim_matlab
 augroup END
 
 " Server commands
-let s:server_script = expand('<sfile>:p:h') . '/../matlab-server.py'
-let s:controller_script = expand('<sfile>:p:h') . '/../matlab_cli_controller.py'
+let s:server_script = expand('<sfile>:p:h') . '/matlab-server.py'
+let s:controller_script = expand('<sfile>:p:h') . '/matlab_cli_controller.py'
 
 " Define the split command based on user preference
 if g:matlab_server_split ==? 'horizontal'
