@@ -1,6 +1,6 @@
 """
-Optimized Matlab CLI Controller for Vim
-This module provides a simple interface to interact with Matlab via a TCP socket.
+Corrected Matlab CLI Controller for Vim
+This module provides a robust interface to interact with Matlab via a TCP socket.
 """
 
 import socket
@@ -9,6 +9,7 @@ import os
 import logging
 import threading
 import queue
+import re
 
 # Configurar logging
 logging.basicConfig(
@@ -84,7 +85,7 @@ class MatlabCliController:
     def run_code(self, lines):
         """Send code to be executed in Matlab."""
         if isinstance(lines, list):
-            code = ','.join(lines)
+            code = '; '.join(lines)
         else:
             code = str(lines)
         
@@ -102,7 +103,11 @@ class MatlabCliController:
                     time.sleep(0.2)
                     continue
                 
-                self.sock.sendall((code + "\n").encode('utf-8'))
+                # Asegurar que termina con salto de línea
+                if not code.endswith("\n"):
+                    code += "\n"
+                
+                self.sock.sendall(code.encode('utf-8'))
                 logger.info(f"Sent to Matlab: {code[:50]}...")
                 break
             except Exception as ex:
@@ -114,11 +119,30 @@ class MatlabCliController:
 
     def run_cell(self, cell_content):
         """Run a Matlab cell (code block starting with %%)."""
-        command_queue.put(('run_cell', cell_content))
-        logger.info(f"Enqueued cell: {cell_content[:50]}...")
+        # CORRECCIÓN: Procesar adecuadamente el contenido de la celda
+        lines = cell_content.split('\n')
+        
+        # Filtrar líneas vacías y comentarios de celda
+        cleaned_lines = []
+        for line in lines:
+            # Omitir líneas de celda %%
+            if line.strip() and not re.match(r'^\s*%%', line):
+                cleaned_lines.append(line)
+        
+        if not cleaned_lines:
+            logger.warning("Cell is empty after removing comments")
+            print("Cell is empty after removing comments")
+            return
+        
+        # Unir las líneas procesadas y enviar como contenido de celda
+        code = '\n'.join(cleaned_lines)
+        command_queue.put(('run_cell', code))
+        logger.info(f"Enqueued cell: {code[:50]}...")
 
     def _send_cell(self, cell_content):
         """Envía una celda de código a MATLAB (método interno)."""
+        # CORRECCIÓN: Asegurar que se envía correctamente el contenido de la celda
+        # El servidor debe recibir un mensaje identificable como celda
         command = f"run_cell:{cell_content}"
         num_retry = 0
         while num_retry < 3:
@@ -127,8 +151,12 @@ class MatlabCliController:
                     num_retry += 1
                     time.sleep(0.2)
                     continue
+                
+                # Asegurar que termina con salto de línea
+                if not command.endswith("\n"):
+                    command += "\n"
                     
-                self.sock.sendall((command + "\n").encode('utf-8'))
+                self.sock.sendall(command.encode('utf-8'))
                 logger.info(f"Sent cell to Matlab: {cell_content[:50]}...")
                 break
             except Exception as ex:
@@ -140,12 +168,20 @@ class MatlabCliController:
 
     def run_file(self, filepath):
         """Run a complete MATLAB file."""
+        # CORRECCIÓN: Validar que el archivo existe antes de enviarlo
+        filepath = os.path.abspath(filepath)  # Convertir a ruta absoluta
+        
+        if not os.path.exists(filepath):
+            logger.error(f"File not found: {filepath}")
+            print(f"Error: File not found: {filepath}")
+            return
+            
         command_queue.put(('run_file', filepath))
         logger.info(f"Enqueued run file: {filepath}")
 
     def _send_run_file(self, filepath):
         """Envía comando para ejecutar archivo (método interno)."""
-        filepath = os.path.abspath(filepath)  # Convertir a ruta absoluta
+        # CORRECCIÓN: Asegurar que se envía correctamente la ruta del archivo
         command = f"run_file:{filepath}"
         
         num_retry = 0
@@ -155,8 +191,12 @@ class MatlabCliController:
                     num_retry += 1
                     time.sleep(0.2)
                     continue
+                
+                # Asegurar que termina con salto de línea
+                if not command.endswith("\n"):
+                    command += "\n"
                     
-                self.sock.sendall((command + "\n").encode('utf-8'))
+                self.sock.sendall(command.encode('utf-8'))
                 logger.info(f"Sent run file command to Matlab: {filepath}")
                 break
             except Exception as ex:
@@ -191,9 +231,12 @@ class MatlabCliController:
     def _send_ctrl_c(self):
         """Envía comando de cancelación (método interno)."""
         try:
-            if self.connected:
-                self.sock.sendall(b"cancel\n")
-                logger.info("Cancel command sent to Matlab")
+            if not self.connected and not self.connect_to_server():
+                logger.error("Cannot send Ctrl+C: not connected")
+                return
+                
+            self.sock.sendall(b"cancel\n")
+            logger.info("Cancel command sent to Matlab")
         except Exception as ex:
             logger.error(f"Error sending cancel command: {ex}")
             self.connected = False

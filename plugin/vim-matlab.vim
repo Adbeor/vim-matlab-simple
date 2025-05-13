@@ -1,5 +1,5 @@
-" Simplified Vim-Matlab Plugin
-" This plugin provides basic functionality to interact with Matlab from Vim
+" Corrected Vim-Matlab Plugin
+" This plugin provides functionality to interact with Matlab from Vim
 
 " Prevent loading the plugin multiple times
 if exists("g:loaded_vim_matlab")
@@ -85,6 +85,7 @@ try:
     if controller is not None:
         filepath = vim.eval('expand("%:p")')
         controller.run_file(filepath)
+        print(f"Running file: {filepath}")
     else:
         print("Matlab controller not initialized. Run :MatlabLaunchServer first.")
 except Exception as e:
@@ -98,10 +99,83 @@ function! s:RunCurrentSelection() range
     call s:RunMatlabCode(l:code)
 endfunction
 
+" NUEVA FUNCIÓN: Ejecutar la celda actual de Matlab
+function! s:RunCurrentCell()
+    call s:InitController()
+    
+    " Encuentra los límites de la celda actual
+    let current_line = line('.')
+    let cell_start = current_line
+    let cell_end = current_line
+    
+    " Buscar hacia atrás para encontrar el inicio de la celda
+    while cell_start > 1 && getline(cell_start - 1) !~ '^\s*%%'
+        let cell_start -= 1
+    endwhile
+    
+    " Buscar hacia adelante para encontrar el final de la celda
+    while cell_end < line('$') && getline(cell_end + 1) !~ '^\s*%%'
+        let cell_end += 1
+    endwhile
+    
+    " Obtener el contenido de la celda
+    let cell_content = getline(cell_start, cell_end)
+    
+    " Si la primera línea comienza con %%, eliminarla o limpiarla
+    if len(cell_content) > 0 && cell_content[0] =~ '^\s*%%'
+        " Conservar el resto de la línea después de %%
+        let first_line = cell_content[0]
+        let clean_first = substitute(first_line, '^\s*%%\s*', '', '')
+        if clean_first != ''
+            let cell_content[0] = clean_first
+        else
+            let cell_content = cell_content[1:]
+        endif
+    endif
+    
+    " Asegurarse que hay contenido para ejecutar
+    if len(cell_content) == 0
+        echo "Celda vacía, nada que ejecutar"
+        return
+    endif
+    
+    " Unir el contenido y enviarlo al controlador
+    let joined_content = join(cell_content, "\n")
+    
+    py3 << EOF
+try:
+    if controller is not None:
+        cell_content = vim.eval('joined_content')
+        controller.run_cell(cell_content)
+        print("Running cell...")
+    else:
+        print("Matlab controller not initialized. Run :MatlabLaunchServer first.")
+except Exception as e:
+    print(f"Error running Matlab cell: {e}")
+EOF
+endfunction
+
+" Función para enviar Ctrl+C a Matlab (cancelar ejecución)
+function! s:SendCtrlC()
+    call s:InitController()
+    py3 << EOF
+try:
+    if controller is not None:
+        controller.send_ctrl_c()
+        print("Sent interrupt signal to Matlab")
+    else:
+        print("Matlab controller not initialized")
+except Exception as e:
+    print(f"Error sending Ctrl+C to Matlab: {e}")
+EOF
+endfunction
+
 " Create the commands
 command! -nargs=1 MatlabRunCode call s:RunMatlabCode(<args>)
 command! MatlabRunFile call s:RunCurrentFile()
 command! -range MatlabRunSelection <line1>,<line2>call s:RunCurrentSelection()
+command! MatlabRunCell call s:RunCurrentCell()
+command! MatlabSendCtrlC call s:SendCtrlC()
 
 " Create the key mappings
 if g:matlab_auto_mappings
@@ -115,6 +189,12 @@ if g:matlab_auto_mappings
         " Run code mappings
         autocmd FileType matlab nnoremap <buffer><silent> <F5> :MatlabRunFile<CR>
         autocmd FileType matlab vnoremap <buffer><silent> <F9> :<C-u>MatlabRunSelection<CR>
+        
+        " NUEVO MAPEO: Ejecutar celda actual
+        autocmd FileType matlab nnoremap <buffer><silent> <F8> :MatlabRunCell<CR>
+        
+        " NUEVO MAPEO: Cancelar ejecución en Matlab
+        autocmd FileType matlab nnoremap <buffer><silent> <C-c> :MatlabSendCtrlC<CR>
     augroup END
 endif
 
@@ -124,5 +204,5 @@ function! MatlabStatusLine()
 endfunction
 
 " Echo helpful info when the plugin loads
-echo "Vim-Matlab simplified plugin loaded. Use :MatlabLaunchServer to start the Matlab server."
-echo "Use F5 to run the entire file or F9 to run selected code in Matlab."
+echo "Vim-Matlab plugin loaded. Use :MatlabLaunchServer to start the Matlab server."
+echo "Use F5 to run file, F8 to run cell, F9 to run selection, Ctrl+C to cancel execution."
